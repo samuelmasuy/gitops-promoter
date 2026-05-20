@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"runtime/debug"
+	"strings"
 	"syscall"
 
 	"go.uber.org/zap/zapcore"
@@ -55,6 +56,7 @@ import (
 	"k8s.io/klog/v2"
 
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -75,6 +77,7 @@ func newControllerCommand(clientConfig clientcmd.ClientConfig) *cobra.Command {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var pprofAddr string
+	var watchNamespaces string
 
 	cmd := &cobra.Command{
 		Use:   "controller",
@@ -87,6 +90,7 @@ func newControllerCommand(clientConfig clientcmd.ClientConfig) *cobra.Command {
 				enableLeaderElection,
 				secureMetrics,
 				enableHTTP2,
+				watchNamespaces,
 				clientConfig,
 			)
 		},
@@ -102,6 +106,7 @@ func newControllerCommand(clientConfig clientcmd.ClientConfig) *cobra.Command {
 	cmd.Flags().BoolVar(&secureMetrics, "metrics-secure", false, "If set the metrics endpoint is served securely")
 	cmd.Flags().BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	cmd.Flags().StringVar(&watchNamespaces, "watch-namespaces", "", "Comma-separated list of additional namespaces to watch. If empty, runs in cluster scope.")
 
 	return cmd
 }
@@ -113,6 +118,7 @@ func runController(
 	enableLeaderElection bool,
 	secureMetrics bool,
 	enableHTTP2 bool,
+	watchNamespaces string,
 	clientConfig clientcmd.ClientConfig,
 ) error {
 	controllerNamespace, _, err := clientConfig.Namespace()
@@ -126,6 +132,16 @@ func runController(
 		os.Exit(1)
 	}
 
+	defaultNamespaces := map[string]cache.Config(nil)
+	if watchNamespaces != "" {
+		namespaces := strings.Split(watchNamespaces, ",")
+		// Namespace where the controller is running must always be watched to have access to its own resources.
+		namespaces = append(namespaces, controllerNamespace)
+		defaultNamespaces = make(map[string]cache.Config, len(namespaces))
+		for _, ns := range namespaces {
+			defaultNamespaces[ns] = cache.Config{}
+		}
+	}
 	// Recover any panic and log using the configured logger. This ensures that panics get logged in JSON format if
 	// JSON logging is enabled.
 	defer func() {
@@ -177,6 +193,9 @@ func runController(
 			SecureServing:  secureMetrics,
 			TLSOpts:        tlsOpts,
 			FilterProvider: metrics.ScrapeLogFilterProvider(),
+		},
+		Cache: cache.Options{
+			DefaultNamespaces: defaultNamespaces,
 		},
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
