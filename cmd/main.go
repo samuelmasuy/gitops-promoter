@@ -78,6 +78,7 @@ func newControllerCommand(clientConfig clientcmd.ClientConfig) *cobra.Command {
 	var enableHTTP2 bool
 	var pprofAddr string
 	var watchNamespaces string
+	var disableResourceCountMetrics bool
 
 	cmd := &cobra.Command{
 		Use:   "controller",
@@ -91,6 +92,7 @@ func newControllerCommand(clientConfig clientcmd.ClientConfig) *cobra.Command {
 				secureMetrics,
 				enableHTTP2,
 				watchNamespaces,
+				disableResourceCountMetrics,
 				clientConfig,
 			)
 		},
@@ -107,6 +109,8 @@ func newControllerCommand(clientConfig clientcmd.ClientConfig) *cobra.Command {
 	cmd.Flags().BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	cmd.Flags().StringVar(&watchNamespaces, "watch-namespaces", "", "Comma-separated list of additional namespaces to watch. If empty, runs in cluster scope.")
+	cmd.Flags().BoolVar(&disableResourceCountMetrics, "disable-resource-count-metrics", false,
+		"Disable the promoter_kubernetes_resources metric runnable. Workaround for multiNamespaceInformer incompatibility when --watch-namespaces is set.")
 
 	return cmd
 }
@@ -119,6 +123,7 @@ func runController(
 	secureMetrics bool,
 	enableHTTP2 bool,
 	watchNamespaces string,
+	disableResourceCountMetrics bool,
 	clientConfig clientcmd.ClientConfig,
 ) error {
 	controllerNamespace, _, err := clientConfig.Namespace()
@@ -223,8 +228,10 @@ func runController(
 
 	localManager := mcMgr.GetLocalManager()
 
-	if err := localManager.Add(metrics.NewResourceCountRunnable(localManager.GetCache())); err != nil {
-		panic(fmt.Errorf("unable to add resource count metrics runnable: %w", err))
+	if !disableResourceCountMetrics {
+		if err := localManager.Add(metrics.NewResourceCountRunnable(localManager.GetCache())); err != nil {
+			panic(fmt.Errorf("unable to add resource count metrics runnable: %w", err))
+		}
 	}
 
 	settingsMgr := settings.NewManager(localManager.GetClient(), localManager.GetAPIReader(), settings.ManagerConfig{
